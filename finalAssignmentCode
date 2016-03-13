@@ -1,0 +1,185 @@
+# model
+
+library(caret)
+library(gbm)
+library(AppliedPredictiveModeling)
+library(ElemStatLearn)
+library(randomForest)
+library(e1071)
+library(kernlab)
+library(rattle)
+library(abind)
+library(arm)
+library(doParallel)
+library(arm)
+library(corrplot)
+
+
+setwd("C:\\Users\\Duska.DUSKA\\Desktop\\Classes\\Practical Machine Learning\\Classroom Assignment")
+training <- read.csv("pml-training.csv", header = TRUE)
+testing <- read.csv("pml-testing.csv", header = TRUE)
+
+# summary(training)
+# summary(testing)
+dim(training)
+dim(testing)
+# head(training)
+names(training)
+
+
+# 160 column (last one is "classe" in training)
+
+# removes all NA columns from test set ( 60 col left )
+(test<-testing[,colSums(is.na(testing))==0])
+dim(test)
+names(test)
+
+#removing problemID because it is not in training sample
+test <- test[,-60]
+
+# getting the names of columns to remove the same from training set 
+keepCols<-colnames(test)
+# train.names.keep <- names(training) %in% keepCols  
+train<-training[,keepCols]
+
+dim(train)
+
+# remove vars with low variance
+lowVarTrain <- nearZeroVar(train, saveMetrics = TRUE)  
+lowVarTest <- nearZeroVar(test, saveMetrics = TRUE) 
+
+row.names(lowVarTest)[which(lowVarTest[,3] == TRUE)] # new_window
+row.names(lowVarTest)[which(lowVarTest[,4] == TRUE)] # new_window
+
+# vars 1:6 are ID data and the new_window var, so will exclude them as not meaningful 
+# to prediction 
+train <- train[,-c(1:6)]
+test <- test[, -c(1:6)]
+
+# checking for NA's 
+sum(is.na(test)) # 0
+sum(is.na(train)) # 0
+
+# check which columns are numeric 
+numeric <- sapply(train, is.numeric)
+# checking if there are any non numeric columns but classe 
+(length(numeric)-1) == sum(numeric[-length(numeric)])
+
+
+# find high correlations and remove those vars (consider only numeric vars)
+corAbove80 <-findCorrelation(cor(train), cutoff=0.8, exact = TRUE) # none
+
+# plot cor
+corMatrix1 <- cor(train[, corAbove80])
+corMatrix2 <- cor(train[, c(-corAbove80)])
+corrplot(corMatrix1, method = "number") # correlations above .80
+corrplot(corMatrix2, method = "color", type = "lower" , tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+
+#########################################################################
+# remove high correlation vars 
+train2 <- train [,-corAbove80]
+test2 <-test[,-corAbove80]
+
+# just to check if all names match
+cbind(sort(names(test)),sort(names(train)))
+
+# add classe var to training 
+train2 <- cbind(train2, training$classe)
+
+names(train2)[41]<-"classe"
+
+
+############################################################
+
+
+set.seed(12345)
+# TrainControl is used to perform 7-fold cross validation.
+tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+
+# making sure predictor var is a factor
+is.factor(training$classe)
+
+# partitioning training data set into training set and validation 
+inTrain <- createDataPartition(y=train2$classe, p=0.6, list=FALSE)
+myTrain <- train2[inTrain, ] 
+validation <- train2[-inTrain, ] # validation 
+
+dim(myTrain)
+dim(validation)
+
+
+# ploting in R studio
+# to avoid "figure margins too large" error
+par(mar=c(1,1,1,1))
+plot(training$classe)
+
+# building models
+
+tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+    
+# Done # boosted trees (gbm) A = .9997451
+btMod <- train(classe~., method = "gbm", data = myTrain,  trControl= tc)
+btPred <- predict(btMod, validation[,-41])
+btCnfMatrix <- confusionMatrix(btPred, validation$classe)
+
+# Done # linear discriminant analysis (lda) A = .65 
+ldaMod <- train(classe~., method = "lda", data = myTrain,  trControl= tc)
+ldaPred <- predict(ldaMod, validation[,-41])
+ldaCnfMatrix <- confusionMatrix(ldaPred, validation$classe)
+
+# Done # random forest (rf) # ran A = .9973
+rfMod <- train(classe~., method = "rf", data = myTrain,  trControl= tc)
+rfPred <- predict(rfMod, validation[,-41])
+rfCnfMatrix <- confusionMatrix(rfPred, validation$classe)
+
+
+# Done # rpart model A = .53
+rPartMod <- train(classe~., data = myTrain, method = "rpart",  trControl= tc)
+rPartModPred <- predict(rPartMod, validation[,-41])
+rPartCnfMatrix <- confusionMatrix(rPartModPred, validation$classe)
+
+    
+    # model "lasso"# did not work at all, wrong type of model for classification 
+    mod_lasso <- train(classe ~., data = myTrain, method = "lasso",  trControl= tc)
+    library(elasticnet)
+        plot.enet(mod_lasso$finalModel, xvar = "penalty", use.color = TRUE)
+    
+    # done # with function "svm" A = .93
+    mod_svm <- svm(classe ~ ., data = myTrain,  trControl= tc)
+    pred_svm <- predict(mod_svm, validation[,-41])
+    T <- table(pred_svm, validation$classe)
+    s <- summary(validation[,41])
+    # my improvisation for prediction rate
+    accuracy_svm <- mean(diag(T/s))
+    
+
+myModels <- c("Boosted Trees", "Linear Discriminant Analysis", 
+              "Random Forest", "Rpart Model", "SVM Linear")
+
+Accuracy <- c(btCnfMatrix$overall[1], ldaCnfMatrix$overall[1], rfCnfMatrix$overall[1], rPartCnfMatrix$overall[1], accuracy_svm)
+
+validationResult <- cbind(myModels, Accuracy)
+row.names(validationResult)<-NULL
+AccuracyOnValidation <- as.data.frame(validationResult)
+
+AccuracyOnValidationSet <- AccuracyOnValidation[order(AccuracyOnValidation[,2], decreasing = TRUE),]
+
+# accuracies for models ran 
+AccuracyOnValidationSet
+
+# top 3 models applied to test data to see if they will give the same predictions 
+rfPredTest <- as.data.frame(predict(rfMod, newdata = testing))  # best model 
+btPredTest <- as.data.frame(predict(btMod, newdata = testing))
+svmPredTest <- as.data.frame(predict(mod_svm, newdata = testing))
+
+TestResults<-cbind(rfPredTest, btPredTest, svmPredTest)
+colnames(TestResults) <-c ("RF", "BT", "SVM")
+TestResults 
+
+# plot best model 
+plot(rfCnfMatrix$table, col = rfCnfMatrix$byClass, 
+     main = paste("Random Forest Model Accuracy =",
+                  round(rfCnfMatrix$overall['Accuracy'], 4)))
+
+# print prediction for RF modle 
+print(TestResults[,1])
