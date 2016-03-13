@@ -1,0 +1,228 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Duska Poljak"
+date: "March 13, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+cache.extra = file.info('classAssignment.Rdata')[, 'mtime']
+```
+
+## Preparing R Work Environment 
+
+```{r, cache = TRUE, cache.extra=file.info('classAssignment.Rdata')[, 'mtime']}
+# load("classAssignment.Rdata")
+
+
+library(caret)
+library(gbm)
+library(AppliedPredictiveModeling)
+library(ElemStatLearn)
+library(randomForest)
+library(e1071)
+library(kernlab)
+library(rattle)
+library(abind)
+library(arm)
+library(doParallel)
+library(arm)
+library(corrplot)
+set.seed(12345)
+
+setwd("C:\\Users\\Duska.DUSKA\\Documents\\GitHub\\PML")
+training <- read.csv("pml-training.csv", header = TRUE)
+testing <- read.csv("pml-testing.csv", header = TRUE)
+
+```
+
+## Processing the Data
+### Variable Reduction 
+Remove variables that are NA's in test data set. 
+```{r }
+test<-testing[,colSums(is.na(testing))==0]
+```
+ 
+Removing  ProblemID because it is not in the training set. 
+```{r }
+test <- test[,-60]
+```
+Applying the same to train data. 
+```{r }
+keepCols<-colnames(test)
+train<-training[,keepCols]
+```
+
+Remove Vars With zero or close to zero variance.
+```{r }
+lowVarTrain <- nearZeroVar(train, saveMetrics = TRUE)  
+lowVarTest <- nearZeroVar(test, saveMetrics = TRUE) 
+
+row.names(lowVarTest)[which(lowVarTest[,3] == TRUE)] # new_window
+row.names(lowVarTest)[which(lowVarTest[,4] == TRUE)] # new_window
+```
+Remove ID data variables. 
+```{r }
+train <- train[,-c(1:6)]
+test <- test[, -c(1:6)]
+```
+Check for NA's. 
+```{r }
+sum(is.na(test)) 
+sum(is.na(train)) 
+```
+Remove vars With high correlation. 
+```{r}
+corAbove80 <-findCorrelation(cor(train), cutoff=0.8, exact = TRUE)
+train2 <- train [,-corAbove80]
+test2 <-test[,-corAbove80]
+corMatrix1 <- cor(train[, corAbove80])
+corMatrix2 <- cor(train[, c(-corAbove80)])
+```
+Plot correlations. First plot are correlations greater than 0.80 and the second plot are correlations lower than 0.80.
+```{r }
+corrplot(corMatrix1, method = "number") # correlations above .80
+corrplot(corMatrix2, method = "color", type = "lower" , tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+```
+
+Add back predictor Var to the training Set. 
+```{r }
+train2 <- cbind(train2, training$classe)
+names(train2)[41]<-"classe"
+```
+Check for dimensions. 
+```{r }
+dim(train2)
+dim(test2)
+```
+
+## Model Building 
+
+Several models are built and their accuracy's compared.
+
+Train control and parallel processing set Up.
+```{r }
+tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+
+```
+Making sure the predictor var is a factor. 
+``` {r }
+is.factor(train2$classe)
+```
+Partitioning training data set into training and validation data sets. 
+```{r }
+inTrain <- createDataPartition(y=train2$classe, p=0.6, list=FALSE)
+myTrain <- train2[inTrain, ] 
+validation <- train2[-inTrain, ]
+
+```
+Plot predictor variable. 
+```{r}
+plot(training$classe)
+```
+
+### Models 
+#### Boosted Trees
+```{r}
+# load("classAssignment.Rdata")
+btMod <- train(classe~., method = "gbm", data = myTrain,  trControl= tc)
+btPred <- predict(btMod, validation[,-41])
+btCnfMatrix <- confusionMatrix(btPred, validation$classe)
+btCnfMatrix
+```
+
+#### Linear Discriminant Analysis
+```{r}
+# load("classAssignment.Rdata")
+ldaMod <- train(classe~., method = "lda", data = myTrain,  trControl= tc)
+ldaPred <- predict(ldaMod, validation[,-41])
+ldaCnfMatrix <- confusionMatrix(ldaPred, validation$classe)
+ldaCnfMatrix
+```
+
+#### Random Forest 
+``` {r}
+# load("classAssignment.Rdata")
+
+rfMod <- train(classe~., method = "rf", data = myTrain,  trControl= tc)
+rfPred <- predict(rfMod, validation[,-41])
+rfCnfMatrix <- confusionMatrix(rfPred, validation$classe)
+rfCnfMatrix
+```
+#### Rpart Model 
+
+```{r}
+# load("classAssignment.Rdata")
+rPartMod <- train(classe~., data = myTrain, method = "rpart",  trControl= tc)
+rPartModPred <- predict(rPartMod, validation[,-41])
+rPartCnfMatrix <- confusionMatrix(rPartModPred, validation$classe)
+rPartCnfMatrix
+```
+#### SVM Model 
+```{r}
+# load("classAssignment.Rdata")
+mod_svm <- svm(classe ~ ., data = myTrain,  trControl= tc)
+     pred_svm <- predict(mod_svm, validation[,-41])
+    T <- table(pred_svm, validation$classe)
+    s <- summary(validation[,41])
+    accuracy_svm <- mean(diag(T/s))
+    accuracy_svm
+```
+
+### Models by Accuracy 
+It shows that Random Trees Model is the best. 
+```{r}
+# load("classAssignment.Rdata")
+myModels <- c("Boosted Trees", "Linear Discriminant Analysis", 
+              "Random Forest", "Rpart Model", "SVM Linear")
+
+Accuracy <- c(btCnfMatrix$overall[1], ldaCnfMatrix$overall[1], rfCnfMatrix$overall[1], rPartCnfMatrix$overall[1], accuracy_svm)
+
+validationResult <- cbind(myModels, Accuracy)
+row.names(validationResult) <- NULL
+AccuracyOnValidation <- as.data.frame(validationResult)
+
+AccuracyOnValidationSet <- AccuracyOnValidation[order(AccuracyOnValidation[,2], decreasing = TRUE),]
+
+AccuracyOnValidationSet
+```
+
+#### Prediction by Top 3 Models on Test Data
+```{r}
+# load("classAssignment.Rdata")
+rfPredTest <- as.data.frame(predict(rfMod, newdata = testing))  # best model 
+btPredTest <- as.data.frame(predict(btMod, newdata = testing))
+svmPredTest <- as.data.frame(predict(mod_svm, newdata = testing))
+TestResults<-cbind(rfPredTest, btPredTest, svmPredTest)
+colnames(TestResults) <-c ("RF", "BT", "SVM")
+TestResults 
+```
+
+#### Random Trees Prediction
+```{r}
+# load("classAssignment.Rdata")
+TestResults[,1]
+```
+
+#### Random Trees Evaluation 
+```{r }
+# load("classAssignment.Rdata")
+
+plot(rfCnfMatrix$table, col = rfCnfMatrix$byClass, main = paste("Random Forest Model Accuracy =", round(rfCnfMatrix$overall['Accuracy'],3)))
+
+rfCnfMatrix
+```
+
+Methods and Conclusion 
+
+First data were processed. All the variables that have no predictive power were removed as demonstrated above. Several models were run and compared. The best model is Random Forest with Accuracy of 0.9975.  
+
+
+
+
+
+
+
+
+
